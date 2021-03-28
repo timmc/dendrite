@@ -17,6 +17,11 @@ type ClientAPI struct {
 	RegistrationDisabled bool `yaml:"registration_disabled"`
 	// If set, allows registration by anyone who also has the shared
 	// secret, even if registration is otherwise disabled.
+	//
+	// ...except that's not implemented yet, so instead if this is set,
+	// it will be split on the "|" character and registration will only
+	// be permitted if a password is provided and it contains one of the
+	// secret values as a prefix. (The password can then be changed later.)
 	RegistrationSharedSecret string `yaml:"registration_shared_secret"`
 
 	// Boolean stating whether catpcha registration is enabled

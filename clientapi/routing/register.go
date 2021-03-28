@@ -253,6 +253,26 @@ func validatePassword(password string) *util.JSONResponse {
 	return nil
 }
 
+// validatePasswordSecret returns an error response if the password prefix
+// secrets are configured and the password does not match any of them.
+//
+// This is a terrible hack and should not be merged.
+func validatePasswordSecret(regSharedSecret string, password string) *util.JSONResponse {
+	if regSharedSecret == "" {
+		return nil
+	}
+	passPrefixes := strings.Split(regSharedSecret, "|")
+	for _, onePrefix := range passPrefixes {
+		if strings.HasPrefix(password, onePrefix) {
+			return nil
+		}
+	}
+	return &util.JSONResponse{
+		Code: http.StatusForbidden,
+		JSON: jsonerror.Forbidden("Cannot create account without using shared secret prefix"),
+	}
+}
+
 // validateRecaptcha returns an error response if the captcha response is invalid
 func validateRecaptcha(
 	cfg *config.ClientAPI,
@@ -701,7 +721,7 @@ func handleApplicationServiceRegistration(
 	// Don't need to worry about appending to registration stages as
 	// application service registration is entirely separate.
 	return completeRegistration(
-		req.Context(), userAPI, r.Username, "", appserviceID, req.RemoteAddr, req.UserAgent(),
+		cfg, req.Context(), userAPI, r.Username, "", appserviceID, req.RemoteAddr, req.UserAgent(),
 		r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
 	)
 }
@@ -720,7 +740,7 @@ func checkAndCompleteFlow(
 	if checkFlowCompleted(flow, cfg.Derived.Registration.Flows) {
 		// This flow was completed, registration can continue
 		return completeRegistration(
-			req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(),
+			cfg, req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(),
 			r.InhibitLogin, r.InitialDisplayName, r.DeviceID,
 		)
 	}
@@ -741,7 +761,7 @@ func LegacyRegister(
 	cfg *config.ClientAPI,
 ) util.JSONResponse {
 	var r legacyRegisterRequest
-	resErr := parseAndValidateLegacyLogin(req, &r)
+	resErr := parseAndValidateLegacyLogin(cfg, req, &r)
 	if resErr != nil {
 		return *resErr
 	}
@@ -772,10 +792,10 @@ func LegacyRegister(
 			return util.MessageResponse(http.StatusForbidden, "HMAC incorrect")
 		}
 
-		return completeRegistration(req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(), false, nil, nil)
+		return completeRegistration(cfg, req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(), false, nil, nil)
 	case authtypes.LoginTypeDummy:
 		// there is nothing to do
-		return completeRegistration(req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(), false, nil, nil)
+		return completeRegistration(cfg, req.Context(), userAPI, r.Username, r.Password, "", req.RemoteAddr, req.UserAgent(), false, nil, nil)
 	default:
 		return util.JSONResponse{
 			Code: http.StatusNotImplemented,
@@ -786,7 +806,7 @@ func LegacyRegister(
 
 // parseAndValidateLegacyLogin parses the request into r and checks that the
 // request is valid (e.g. valid user names, etc)
-func parseAndValidateLegacyLogin(req *http.Request, r *legacyRegisterRequest) *util.JSONResponse {
+func parseAndValidateLegacyLogin(cfg *config.ClientAPI, req *http.Request, r *legacyRegisterRequest) *util.JSONResponse {
 	resErr := httputil.UnmarshalJSONRequest(req, &r)
 	if resErr != nil {
 		return resErr
@@ -820,6 +840,7 @@ func parseAndValidateLegacyLogin(req *http.Request, r *legacyRegisterRequest) *u
 // registerRequests and legacyRegisterRequests, which share some attributes but
 // not all
 func completeRegistration(
+	cfg *config.ClientAPI,
 	ctx context.Context,
 	userAPI userapi.UserInternalAPI,
 	username, password, appserviceID, ipAddr, userAgent string,
@@ -838,6 +859,10 @@ func completeRegistration(
 			Code: http.StatusBadRequest,
 			JSON: jsonerror.BadJSON("missing password"),
 		}
+	}
+
+	if resErr := validatePasswordSecret(cfg.RegistrationSharedSecret, password); resErr != nil {
+		return *resErr
 	}
 
 	var accRes userapi.PerformAccountCreationResponse
